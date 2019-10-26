@@ -6,13 +6,16 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::fs::File as FsFile;
+use std::os::unix::io::AsRawFd;
+use nix::fcntl::{flock, FlockArg};
 
 #[macro_use]
 extern crate lazy_static;
 
 lazy_static! {
-    // .S01E07. or .S01.COMPLETE. or S01E08 or S01 Complete or S01 CoMpLeTe
-    static ref TV_RE : Regex = RegexBuilder::new(r"([\.\s]S\d+E\d+[\.\s])|([\.\s]S\d+[\.\s]COMPLETE[\.\s])")
+    // .S01E07. or .S01. or S01E08 or s01 or S01 or season 1 or .complete.
+    static ref TV_RE : Regex = RegexBuilder::new(r"([\.\s]S\d+E\d+[\.\s])|([\.\s]S\d+[\.\s])|(\sseason\s\d+\s)|(\.complete\.)")
         .case_insensitive(true)
         .build()
         .expect("Invalid Regex");
@@ -82,6 +85,7 @@ fn download_files(file: File, parent_dir: &Path) -> Result<(), Box<dyn std::erro
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // load .env
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
         let env_path = &args[1];
@@ -89,6 +93,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         dotenv().ok();
     }
+
+    // Check for single instance by trying to acquire an exclusive lock
+    // on a file. The program quits if the file is already locked (another instance running).
+    let lock_file = FsFile::create(env::var("LOCK_FILE")?)?;
+    let lfd = lock_file.as_raw_fd();
+    flock(lfd, FlockArg::LockExclusiveNonblock)?;
 
     let url = env::var("TCLOUD_URL")?;
     let movies_dir = env::var("MOVIES_DIR")?;
@@ -114,6 +124,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // release lock
+    drop(lock_file);
+
     Ok(())
 }
 
@@ -135,6 +148,10 @@ pub mod tests {
         let nine = "A Good Woman Is Hard to Find (2019) [WEBRip] [720p] [YTS] [YIFY]";
         let ten = " Limbo.2019.HDRip.XviD.AC3-EVO ";
 
+        let eleven = "Money Heist season 1 complete English x264 1080p Obey[TGx]";
+        let twelve = "Money.Heist.S01.SPANISH.1080p.NF.WEBRip.DDP2.0.x264-Mooi1990[rartv]";
+        let thirteen = "La.Casa.de.Papel.COMPLETE.1080p.NF.WEBRip.x265.HEVC.2CH-MRN";
+
         assert!(TV_RE.is_match(one));
         assert!(TV_RE.is_match(two));
         assert!(TV_RE.is_match(three));
@@ -146,5 +163,9 @@ pub mod tests {
         assert!(!TV_RE.is_match(eight));
         assert!(!TV_RE.is_match(nine));
         assert!(!TV_RE.is_match(ten));
+
+        assert!(TV_RE.is_match(eleven));
+        assert!(TV_RE.is_match(twelve));
+        assert!(TV_RE.is_match(thirteen));
     }
 }
