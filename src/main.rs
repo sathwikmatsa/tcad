@@ -1,14 +1,15 @@
 use dotenv::dotenv;
+use nix::fcntl::{flock, FlockArg};
 use regex::Regex;
 use regex::RegexBuilder;
 use serde::Deserialize;
 use std::env;
 use std::fs;
-use std::path::Path;
-use std::process::Command;
 use std::fs::File as FsFile;
 use std::os::unix::io::AsRawFd;
-use nix::fcntl::{flock, FlockArg};
+use std::path::Path;
+use std::process::Command;
+use chrono::prelude::*;
 
 #[macro_use]
 extern crate lazy_static;
@@ -67,6 +68,7 @@ fn download_files(file: File, parent_dir: &Path) -> Result<(), Box<dyn std::erro
             ))
             .arg("-d")
             .arg(&parent_dir)
+            .arg("-q")
             .status()?;
     } else {
         if let Some(childs) = file.childs {
@@ -100,6 +102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lfd = lock_file.as_raw_fd();
     flock(lfd, FlockArg::LockExclusiveNonblock)?;
 
+    println!("[{}] Active Instance", Local::now());
+
     let url = env::var("TCLOUD_URL")?;
     let movies_dir = env::var("MOVIES_DIR")?;
     let movies_dirpath = Path::new(&movies_dir);
@@ -113,6 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let files_section: File = serde_json::from_str(res_folders.text()?.as_str())?;
     if let Some(files) = files_section.childs {
         for file in files.into_iter() {
+            let file_name = file.name.clone();
             let parent_dirpath;
             if TV_RE.is_match(&file.name) {
                 parent_dirpath = &tv_dirpath;
@@ -121,6 +126,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             create_directories(&file, parent_dirpath)?;
             download_files(file, parent_dirpath)?;
+
+
+            let current_timestamp: DateTime<Local> = Local::now();
+            println!("[{}] Finished download: {}", current_timestamp, file_name);
+
+            // notify
+            Command::new("notify-send")
+                .arg("Finished download:")
+                .arg(file_name)
+                .status()?;
         }
     }
 
