@@ -4,9 +4,12 @@ tcloud automatic downloader [For Linux]
 https://github.com/Lunik/tcloud-heroku
 
 ## Dependencies
-- [Rust](https://www.rust-lang.org/tools/install)
+- [Rust](https://www.rust-lang.org/tools/install) (if you want to build locally)
 - [aria2c](https://aria2.github.io/)
 - [notify-send](https://www.archlinux.org/packages/extra/x86_64/libnotify/)
+
+
+Note: You can download the readily available binary at https://github.com/sathwikmatsa/tcad/releases/download/0.1/tcad and skip the `Build` section.
 
 ## Build
 ```
