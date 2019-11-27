@@ -1,26 +1,17 @@
+use chrono::prelude::*;
 use dotenv::dotenv;
-use nix::fcntl::{flock, FlockArg};
-use regex::Regex;
-use regex::RegexBuilder;
+use fs2::FileExt;
 use serde::Deserialize;
 use std::env;
 use std::fs;
+use std::fs::OpenOptions;
 use std::fs::File as FsFile;
-use std::os::unix::io::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::io::Write;
 use std::process::Command;
-use chrono::prelude::*;
 
-#[macro_use]
-extern crate lazy_static;
-
-lazy_static! {
-    // .S01E07. or .S01. or S01E08 or s01 or S01 or season 1 or .complete.
-    static ref TV_RE : Regex = RegexBuilder::new(r"([\.\s]S\d+E\d+[\.\s])|([\.\s]S\d+[\.\s])|(\sseason\s\d+\s)|(\.complete\.)")
-        .case_insensitive(true)
-        .build()
-        .expect("Invalid Regex");
-}
+#[cfg(not(target_os = "windows"))]
+use notify_rust::Notification;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,20 +51,21 @@ fn download_files(file: File, parent_dir: &Path) -> Result<(), Box<dyn std::erro
     let current_path = parent_dir.join(&file.url[8..]);
 
     if file.kind == "file" {
-        Command::new("aria2c")
+        Command::new("wget")
+            .arg("-q")
+            .arg("-c")
             .arg(format!(
                 "{}{}",
                 env::var("TCLOUD_URL")?,
                 file.download.unwrap()
             ))
-            .arg("-d")
-            .arg(&parent_dir)
-            .arg("-q")
+            .arg("-O")
+            .arg(&current_path)
             .status()?;
     } else {
         if let Some(childs) = file.childs {
             for f in childs.into_iter() {
-                download_files(f, &current_path)?;
+                download_files(f, &parent_dir)?;
             }
         }
     }
@@ -86,30 +78,80 @@ fn download_files(file: File, parent_dir: &Path) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn send_notification(torrent_name: &str, fpath: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let psh_toast_file;
+    if Path::new("./toast.ps1").exists() {
+        psh_toast_file = String::from("toast.ps1");
+    } else {
+        let mut toast_path = env::current_exe()?;
+        toast_path.pop();
+        toast_path.push("toast.ps1");
+        // may not exist
+        psh_toast_file = toast_path.into_os_string()
+            .into_string()
+            .unwrap();
+    }
+
+    Command::new("powershell")
+        .args(&[
+            "-nologo",
+            "-executionpolicy",
+            "bypass",
+            "-File",
+            &psh_toast_file,
+            torrent_name,
+            fpath,
+        ])
+        .status()?;
+
+    Ok(())
+}
+#[cfg(not(target_os = "windows"))]
+fn send_notification(torrent_name: &str, _fpath: &str) -> Result<(), Box<dyn std::error::Error>> {
+    Notification::new()
+        .summary(torrent_name)
+        .body("TCAD: Download Complete")
+        .show()?;
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // load .env
+    // search priority: cmd arg > pwd > directory of binary
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
         let env_path = &args[1];
+        println!("Load .env from cmd line arg: {}", env_path);
         dotenv::from_path(env_path)?;
-    } else {
+    } else if Path::new("./.env").exists() {
+        println!("Load .env from PWD: {:#?}", env::current_dir()?);
         dotenv().ok();
+    } else {
+        let mut env_path = env::current_exe()?;
+        env_path.pop();
+        env_path.push(".env");
+        println!("Load .env from exe_dir: {:#?}", env_path);
+        dotenv::from_path(env_path)?;
     }
 
     // Check for single instance by trying to acquire an exclusive lock
     // on a file. The program quits if the file is already locked (another instance running).
-    let lock_file = FsFile::create(env::var("LOCK_FILE")?)?;
-    let lfd = lock_file.as_raw_fd();
-    flock(lfd, FlockArg::LockExclusiveNonblock)?;
+    let mut lock_file_path = PathBuf::new();
+    lock_file_path.push(env::var("LOG_DIR")?);
+    lock_file_path.push(".tcad.lock");
+    let lock_file = FsFile::create(lock_file_path)?;
+    lock_file.try_lock_exclusive()?;
 
-    println!("[{}] Active Instance", Local::now());
+    let mut log_file_path = PathBuf::new();
+    log_file_path.push(env::var("LOG_DIR")?);
+    log_file_path.push("tcad.log");
+    let mut log = OpenOptions::new().append(true).create(true).open(log_file_path)?;
+    writeln!(log, "[{}] Active Instance", Local::now())?;
 
     let url = env::var("TCLOUD_URL")?;
-    let movies_dir = env::var("MOVIES_DIR")?;
-    let movies_dirpath = Path::new(&movies_dir);
-
-    let tv_dir = env::var("TV_DIR")?;
-    let tv_dirpath = Path::new(&tv_dir);
+    let download_dir = env::var("DOWNLOAD_DIR")?;
+    let download_dirpath = Path::new(&download_dir);
 
     let folder_url = format!("{}/folder", url);
     let mut res_folders = reqwest::get(folder_url.as_str())?;
@@ -118,69 +160,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(files) = files_section.childs {
         for file in files.into_iter() {
             let file_name = file.name.clone();
-            let parent_dirpath;
-            if TV_RE.is_match(&file.name) {
-                parent_dirpath = &tv_dirpath;
-            } else {
-                parent_dirpath = &movies_dirpath;
-            }
+            writeln!(log, "[{}] Downloading {}", Local::now(), file_name)?;
+            let parent_dirpath = &download_dirpath;
+
             create_directories(&file, parent_dirpath)?;
             download_files(file, parent_dirpath)?;
 
-
-            let current_timestamp: DateTime<Local> = Local::now();
-            println!("[{}] Finished download: {}", current_timestamp, file_name);
+            writeln!(log, "[{}] Finished download: {}", Local::now(), file_name)?;
 
             // notify
-            Command::new("notify-send")
-                .arg("Finished download:")
-                .arg(file_name)
-                .status()?;
+            writeln!(log, "[{}] Sending notification", Local::now())?;
+            send_notification(&file_name, download_dirpath.to_str().unwrap())?;
         }
     }
 
     // release lock
-    drop(lock_file);
-
+    lock_file.unlock()?;
+    writeln!(log, "[{}] Exiting..", Local::now())?;
     Ok(())
-}
-
-#[cfg(test)]
-pub mod tests {
-    use super::*;
-    #[test]
-    fn is_tv_torrent() {
-        let one = "Peaky.Blinders.S05E01.Black.Tuesday.1080p.AMZN.WEB-DL.DD+5.1.H.264-AJP69[TGx]";
-        let two = "Daybreak.2019.S01.COMPLETE.720p.NF.WEBRip.x264-GalaxyTV";
-        let three =
-            "Daybreak (2019) S01 COMPLETE PROPER 720p NF WEB-DL x264 AAC 3.5GB ESub [MOVCR]";
-        let four = "Guilt S01E01 HDTV x264-MTB [eztv]";
-        let five = "Daybreak (2019) S01 Complete [Hindi 5.1 + English] 720p WEB-DL x264 MSub ";
-
-        let six = "The Art of Racing in the Rain (2019) [BluRay] [720p] [YTS] [YIFY]";
-        let seven = "Fast & Furious Presents: Hobbs & Shaw (2019) [BluRay] [720p] [YTS] [YIFY]";
-        let eight = "Fourplay (2018) [WEBRip] [720p] [YTS] [YIFY]";
-        let nine = "A Good Woman Is Hard to Find (2019) [WEBRip] [720p] [YTS] [YIFY]";
-        let ten = " Limbo.2019.HDRip.XviD.AC3-EVO ";
-
-        let eleven = "Money Heist season 1 complete English x264 1080p Obey[TGx]";
-        let twelve = "Money.Heist.S01.SPANISH.1080p.NF.WEBRip.DDP2.0.x264-Mooi1990[rartv]";
-        let thirteen = "La.Casa.de.Papel.COMPLETE.1080p.NF.WEBRip.x265.HEVC.2CH-MRN";
-
-        assert!(TV_RE.is_match(one));
-        assert!(TV_RE.is_match(two));
-        assert!(TV_RE.is_match(three));
-        assert!(TV_RE.is_match(four));
-        assert!(TV_RE.is_match(five));
-
-        assert!(!TV_RE.is_match(six));
-        assert!(!TV_RE.is_match(seven));
-        assert!(!TV_RE.is_match(eight));
-        assert!(!TV_RE.is_match(nine));
-        assert!(!TV_RE.is_match(ten));
-
-        assert!(TV_RE.is_match(eleven));
-        assert!(TV_RE.is_match(twelve));
-        assert!(TV_RE.is_match(thirteen));
-    }
 }
