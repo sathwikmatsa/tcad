@@ -1,16 +1,21 @@
 # tcad
-tcloud automatic downloader [For Linux]
+tcloud automatic downloader
 
 https://github.com/Lunik/tcloud-heroku
 
 ## Dependencies
 Install the following:
-- [Rust](https://www.rust-lang.org/tools/install) (if you want to build locally)
-- [aria2c](https://aria2.github.io/)
-- [notify-send](https://www.archlinux.org/packages/extra/x86_64/libnotify/)
+- [wget](https://chocolatey.org/packages/Wget) (comes pre-installed in Linux on most distros)
+For Windows Users: `choco install wget`
 
+## Installation
+## Windows
+Download [release](https://github.com/sathwikmatsa/tcad/releases/download/0.2/TCAD_For_Windows.zip)
 
-**Note**: You can download the readily available binary at https://github.com/sathwikmatsa/tcad/releases/download/0.1/tcad and skip the `Build` section.
+Extract it and run `install.bat`
+
+## Linux
+Download the readily available binary at https://github.com/sathwikmatsa/tcad/releases/download/0.1/tcad and skip the `Build` section.
 
 ## Build
 ```
