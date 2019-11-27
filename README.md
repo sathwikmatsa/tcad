@@ -25,7 +25,7 @@ Download the readily available binary at https://github.com/sathwikmatsa/tcad/re
 ```
 
 ## Configure
-[`> cp .env_sample .env`](https://github.com/sathwikmatsa/tcad/blob/master/.env_sample)
+[`> cp .env_sample .env`](https://github.com/sathwikmatsa/tcad/blob/b64cbd1702ee7d7bd691853349ab1b2d1f910440/.env_sample)
 
 **substitue** dummy values in `.env` with actuals
 
