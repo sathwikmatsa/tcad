@@ -8,6 +8,10 @@ IF %ERRORLEVEL% NEQ 0 GOTO DEP_ERROR
 
 SET TCAD_DIR=%USERPROFILE%\.bin\tcad
 
+:: add tcad directory to path
+for /f "usebackq tokens=2,*" %%A in (`reg query HKCU\Environment /v PATH`) do set user_path=%%B
+SETX PATH "%user_path%;%TCAD_DIR%"
+
 :: Check for tcad.exe
 IF EXIST tcad.exe (
     MKDIR %TCAD_DIR%
